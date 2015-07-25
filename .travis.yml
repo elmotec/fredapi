@@ -10,12 +10,14 @@ install:
     - python setup.py --quiet install
 
 script:
-    - python fredapi/tests/test_fred.py -v
+    nosetests -vvv -s
     # For some reason, running the tests like this does not work for
     # python 2.7 and 3.4:
     # - python -m unittest fredapi/tests/test_fred.py -v
     # - python setup.py test
+    # - python fredapi/tests/test_fred.py -v
 
 after_success:
     - coverage run --source massedit tests.py
     - coveralls
+

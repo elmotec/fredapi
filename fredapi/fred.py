@@ -64,7 +64,14 @@ class Fred(object):
         url += '&api_key=' + self.api_key
         try:
             response = urlopen(url)
-            root = ET.fromstring(response.read())
+            content = response.read()
+            try:
+                root = ET.fromstring(content)
+            except UnicodeEncodeError:
+                # If we hit unicode errors, remove all the characters that
+                # are non-ascii characters from the response and try again.
+                content = ''.join([ch for ch in content if ord(ch) < 128])
+                root = ET.fromstring(content)
         except HTTPError as exc:
             root = ET.fromstring(exc.read())
             raise ValueError(root.get('message'))

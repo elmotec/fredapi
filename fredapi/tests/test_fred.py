@@ -17,6 +17,7 @@ else:
 import datetime as dt
 import textwrap
 import contextlib
+import codecs
 
 import pandas as pd
 
@@ -74,6 +75,22 @@ sp500_obs_call = HTTPCall('series/observations?series_id=SP500&{}&{}'.
   <observation realtime_start="2015-06-28" realtime_end="2015-06-28"
                date="2014-09-05" value="2007.71"/>
 </observations>'''))
+sp500_info_call = HTTPCall('series?series_id=SP500',
+                           response=textwrap.dedent('''\
+<?xml version="1.0" encoding="utf-8" ?>
+<seriess realtime_start="2015-07-18" realtime_end="2015-07-18">
+  <series id="SP500" realtime_start="2015-07-18"
+                     realtime_end="2015-07-18"
+                     title="S&amp;P 500©"
+                     observation_start="2005-07-18"
+                     observation_end="2015-07-17" frequency="Daily"
+                     frequency_short="D" units="Index"
+                     units_short="Index"
+                     seasonal_adjustment="Not Seasonally Adjusted"
+                     seasonal_adjustment_short="NSA"
+                     last_updated="2015-07-17 17:24:36-05"
+                     popularity="82" notes="..." />
+</seriess>'''))
 search_call = HTTPCall('release/series?release_id=175&' +
                        'order_by=series_id&sort_order=asc',
                        response = textwrap.dedent('''\
@@ -157,9 +174,31 @@ class TestFred(unittest.TestCase):
         """Cleanup."""
         pass
 
-    def prepare_urlopen(self, urlopen, http_response=None, side_effect=None):
-        """Set urlopen to return http_response or the regular call."""
+    def prepare_urlopen(self, urlopen, http_response=None, side_effect=None,
+                        encoding='UTF-8'):
+        """Set urlopen to return http_response or the regular call.
+
+        Helper function to prepare the url and response faked from FRED.
+
+        Parameters
+        ----------
+           http_response (str): string expected to be returned by urlopen.
+
+           side_effect (list of str): strings expected to be returned by
+           urlopen, use this if there are more than one call to urlopen.
+
+           encoding (str): encodes the response and side_effect if specified.
+
+        """
         if self.fake_fred_call:
+            if http_response and side_effect:
+                raise ValueError("only one of http_response or side_effect")
+            if encoding:
+                encode = codecs.getencoder(encoding)
+                if http_response:
+                    http_response, _ = encode(http_response)
+                elif side_effect:
+                    side_effect, _ = [encode(se) for se in side_effect]
             if http_response:
                 urlopen.return_value.read.return_value = http_response
             elif side_effect:
@@ -177,6 +216,21 @@ class TestFred(unittest.TestCase):
         urlopen.assert_called_with(sp500_obs_call.url)
         self.assertEqual(serie.ix['9/2/2014'], 2002.28)
         self.assertEqual(len(serie), 4)
+
+    @mock.patch('fredapi.fred.urlopen')
+    def test_handling_of_ascii_response(self, urlopen):
+        """Test handling of ascii response (breaks Python 2.7)."""
+        self.prepare_urlopen(urlopen, http_response=sp500_info_call.response)
+        # Overwrite the return value with ascii str instead of UTF-8.
+        urlopen.return_value.read.return_value = sp500_info_call.response
+        info = self.fred.get_series_info('SP500')
+        urlopen.assert_called_with(sp500_info_call.url)
+        expected_title = 'S&P 500\xa9'
+        if sys.version_info[0] < 3:  # Only breaks Python 2.7
+            expected_title = 'S&P 500'
+        self.assertEqual(info['title'], expected_title)
+        self.assertEqual(info['frequency'], 'Daily')
+        self.assertEqual(info['frequency_short'], 'D')
 
     @mock.patch('fredapi.fred.urlopen')
     def test_get_series_info_payem(self, urlopen):
@@ -203,7 +257,7 @@ class TestFred(unittest.TestCase):
                 ''')
         fp = io.StringIO(unicode(error))
         side_effect = fredapi.fred.HTTPError(url, 400, '', '', fp)
-        self.prepare_urlopen(urlopen, side_effect=side_effect)
+        self.prepare_urlopen(urlopen, side_effect=side_effect, encoding=None)
         with self.assertRaises(ValueError):
             self.fred.get_series('invalid')
         urlopen.assert_called_with(url)
@@ -221,7 +275,7 @@ class TestFred(unittest.TestCase):
         '''.format(error_msg))
         fp = io.StringIO(unicode(xml_error))
         side_effect = fredapi.fred.HTTPError(url, 400, 'Bad Request', '', fp)
-        self.prepare_urlopen(urlopen, side_effect = side_effect)
+        self.prepare_urlopen(urlopen, side_effect = side_effect, encoding=None)
         with self.assertRaises(ValueError) as context:
             self.fred.get_series_info('invalid')
         self.assertEqual(unicode(context.exception), error_msg)
@@ -233,7 +287,7 @@ class TestFred(unittest.TestCase):
         url = '{}/series?series_id=invalid&api_key={}'.format(self.root_url,
                                                               fred_api_key)
         side_effect = fredapi.fred.HTTPError(url, 400, '', '', sys.stderr)
-        self.prepare_urlopen(urlopen, side_effect=side_effect)
+        self.prepare_urlopen(urlopen, side_effect=side_effect, encoding=None)
         with self.assertRaises(ValueError) as context:
             self.fred.get_series('SP500',
                                  observation_start='invalid-datetime-str')
@@ -242,7 +296,7 @@ class TestFred(unittest.TestCase):
 
     @mock.patch('fredapi.fred.urlopen')
     def test_search(self, urlopen):
-        """Simple test to check retrieval of series info."""
+        """Test retrieval of release information."""
         self.prepare_urlopen(urlopen, http_response=search_call.response)
         pi_series = self.fred.search_by_release(175, limit=3,
                                                 order_by='series_id',
