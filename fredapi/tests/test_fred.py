@@ -296,7 +296,7 @@ class TestFred(unittest.TestCase):
 
     @mock.patch('fredapi.fred.urlopen')
     def test_search(self, urlopen):
-        """Test retrieval of release information."""
+        """Simple test to check retrieval of series info."""
         self.prepare_urlopen(urlopen, http_response=search_call.response)
         pi_series = self.fred.search_by_release(175, limit=3,
                                                 order_by='series_id',
